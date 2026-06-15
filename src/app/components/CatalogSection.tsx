@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { ProductCard } from "./ProductCard";
 import { ProductModal } from "./ProductModal";
@@ -13,6 +13,8 @@ interface CatalogSectionProps {
   products: Product[];
   categories: Category[];
   orderHref: string;
+  productToOpenId?: string;
+  onProductOpened?: () => void;
 }
 
 function getCategoryStoneWidth(label: string) {
@@ -22,9 +24,10 @@ function getCategoryStoneWidth(label: string) {
   return 88;
 }
 
-export function CatalogSection({ products, categories, orderHref }: CatalogSectionProps) {
+export function CatalogSection({ products, categories, orderHref, productToOpenId, onProductOpened }: CatalogSectionProps) {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [activeCategory, setActiveCategory] = useState(ALL_CATEGORY);
+  const openedProductRef = useRef("");
   const categoryNames = [
     ALL_CATEGORY,
     ...Array.from(new Set([
@@ -37,6 +40,18 @@ export function CatalogSection({ products, categories, orderHref }: CatalogSecti
     const matchCat = activeCategory === ALL_CATEGORY || getProductCategories(p).includes(activeCategory);
     return matchCat;
   });
+
+  useEffect(() => {
+    if (!productToOpenId || openedProductRef.current === productToOpenId) return;
+
+    const product = products.find((item) => item.id === productToOpenId);
+    if (!product) return;
+
+    openedProductRef.current = productToOpenId;
+    setActiveCategory(ALL_CATEGORY);
+    setSelectedProduct(product);
+    onProductOpened?.();
+  }, [onProductOpened, productToOpenId, products]);
 
   return (
     <section

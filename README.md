@@ -56,3 +56,23 @@ pnpm dev
 ```
 
 Для кнопки Mini App в профиле бота настройте Main Mini App в `@BotFather`. Сервер также автоматически настраивает menu button через Bot API.
+
+## Broadcast Telegram
+
+Пользователь попадает в список рассылки после сообщения боту или команды `/start`.
+
+В админке:
+
+- `Broadcast` отправляет ручное сообщение всем активным iscritti Telegram.
+- При создании нового продукта можно включить `Invia broadcast Telegram dopo il salvataggio`.
+- Уведомление о продукте открывает Mini App сразу на карточке товара.
+
+## Telegram admin login
+
+В личном чате с ботом напишите:
+
+```text
+Tropico6
+```
+
+Бот попросит пароль админки из `.env` (`ADMIN_PASSWORD`). Если пароль правильный, бот отправит кнопку `Apri pannello admin`; она открывает `/admin` уже с активной сессией. Token одноразовый и живёт 5 минут.

@@ -48,11 +48,17 @@ export interface SiteSettings {
   orderUrl: string;
 }
 
+export interface BroadcastStats {
+  subscriberCount: number;
+  totalSubscriberCount?: number;
+}
+
 export interface SiteData {
   settings: SiteSettings;
   categories: Category[];
   contacts: ContactLink[];
   products: Product[];
+  broadcast?: BroadcastStats;
 }
 
 export const products: Product[] = [

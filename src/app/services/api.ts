@@ -1,4 +1,19 @@
-import type { Category, ContactLink, Product, SiteData, SiteSettings } from "../data/products";
+import type { BroadcastStats, Category, ContactLink, Product, SiteData, SiteSettings } from "../data/products";
+
+export interface BroadcastResult {
+  total: number;
+  sent: number;
+  failed: number;
+  disabled: number;
+  skipped: number;
+  subscriberCount?: number;
+}
+
+export interface CreateProductResult {
+  product: Product;
+  broadcast: BroadcastResult | null;
+  broadcastError?: string;
+}
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -32,6 +47,13 @@ export async function loginAdmin(username: string, password: string) {
   return jsonRequest<{ user: { username: string } }>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function loginAdminWithTelegramToken(token: string) {
+  return jsonRequest<{ user: { username: string } }>("/api/auth/telegram-admin-login", {
+    method: "POST",
+    body: JSON.stringify({ token }),
   });
 }
 
@@ -81,10 +103,10 @@ export async function deleteAdminCategory(id: string): Promise<Category[]> {
   });
 }
 
-export async function createAdminProduct(product: Product): Promise<Product> {
-  return jsonRequest<Product>("/api/admin/products", {
+export async function createAdminProduct(product: Product, options: { notifyTelegram?: boolean } = {}): Promise<CreateProductResult> {
+  return jsonRequest<CreateProductResult>("/api/admin/products", {
     method: "POST",
-    body: JSON.stringify(product),
+    body: JSON.stringify({ ...product, notifyTelegram: options.notifyTelegram === true }),
   });
 }
 
@@ -123,5 +145,16 @@ export async function deleteAdminProductMedia(productId: string, url: string): P
   return jsonRequest<Product>(`/api/admin/products/${encodeURIComponent(productId)}/media`, {
     method: "DELETE",
     body: JSON.stringify({ url }),
+  });
+}
+
+export async function fetchAdminBroadcastStats(): Promise<BroadcastStats> {
+  return jsonRequest<BroadcastStats>("/api/admin/broadcast");
+}
+
+export async function sendAdminBroadcast(message: string, buttonText: string): Promise<BroadcastResult> {
+  return jsonRequest<BroadcastResult>("/api/admin/broadcast", {
+    method: "POST",
+    body: JSON.stringify({ message, buttonText }),
   });
 }

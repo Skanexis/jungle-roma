@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import multer from "multer";
 import sharp from "sharp";
-import { startTelegramBot } from "./telegram-bot.mjs";
+import { sendProductBroadcast, sendTelegramBroadcast, startTelegramBot } from "./telegram-bot.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -20,6 +20,7 @@ const distDir = path.join(rootDir, "dist");
 const PORT = Number(process.env.PORT || 3001);
 const SESSION_COOKIE = "jr_admin_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+const ADMIN_LOGIN_TOKEN_TTL_MS = 1000 * 60 * 5;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "jungle-admin-2026";
 const MAX_PRODUCT_IMAGE_SIZE = 1920;
@@ -36,6 +37,7 @@ const UPLOAD_WEBP_OPTIONS = {
   smartSubsample: true,
 };
 const sessions = new Map();
+const adminLoginTokens = new Map();
 
 async function loadEnvFile(envFile) {
   let raw = "";
@@ -80,6 +82,7 @@ const EMPTY_DB = {
   categories: [{ id: "products", name: "Prodotti" }],
   contacts: [],
   products: [],
+  telegramSubscribers: [],
 };
 
 const upload = multer({
@@ -209,6 +212,22 @@ function normalizeContact(contact = {}, usedIds = new Set()) {
   };
 }
 
+function normalizeTelegramSubscriber(subscriber = {}) {
+  const chatId = cleanString(subscriber.chatId);
+  if (!chatId) return null;
+
+  return {
+    chatId,
+    firstName: cleanString(subscriber.firstName),
+    lastName: cleanString(subscriber.lastName),
+    username: cleanString(subscriber.username).replace(/^@/, ""),
+    languageCode: cleanString(subscriber.languageCode),
+    isActive: subscriber.isActive === undefined ? true : cleanBoolean(subscriber.isActive),
+    createdAt: cleanString(subscriber.createdAt, nowIso()),
+    updatedAt: cleanString(subscriber.updatedAt, nowIso()),
+  };
+}
+
 function normalizeProduct(product = {}, usedIds = new Set(), existing = null, options = {}) {
   const name = cleanString(product.name);
   if (!name) {
@@ -265,6 +284,9 @@ function normalizeDb(db) {
     products: (Array.isArray(db?.products) ? db.products : [])
       .map((product) => normalizeProduct(product, productIds, product, { touch: false }))
       .filter(Boolean),
+    telegramSubscribers: (Array.isArray(db?.telegramSubscribers) ? db.telegramSubscribers : [])
+      .map(normalizeTelegramSubscriber)
+      .filter(Boolean),
   };
 }
 
@@ -297,6 +319,65 @@ function publicDb(db) {
     contacts: db.contacts,
     products: db.products.filter((product) => product.isActive),
   };
+}
+
+function activeTelegramSubscribers(db) {
+  return (db.telegramSubscribers || []).filter((subscriber) => subscriber.isActive !== false);
+}
+
+function adminDb(db) {
+  return {
+    ...db,
+    broadcast: {
+      subscriberCount: activeTelegramSubscribers(db).length,
+      totalSubscriberCount: db.telegramSubscribers.length,
+    },
+  };
+}
+
+async function upsertTelegramSubscriber(profile = {}) {
+  const nextSubscriber = normalizeTelegramSubscriber({
+    ...profile,
+    isActive: true,
+    updatedAt: nowIso(),
+  });
+
+  if (!nextSubscriber) return null;
+
+  const db = await readDb();
+  const index = db.telegramSubscribers.findIndex((subscriber) => subscriber.chatId === nextSubscriber.chatId);
+
+  if (index === -1) {
+    db.telegramSubscribers.push({
+      ...nextSubscriber,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    });
+  } else {
+    db.telegramSubscribers[index] = {
+      ...db.telegramSubscribers[index],
+      ...nextSubscriber,
+      createdAt: db.telegramSubscribers[index].createdAt,
+      updatedAt: nowIso(),
+      isActive: true,
+    };
+  }
+
+  const saved = await writeDb(db);
+  return saved.telegramSubscribers.find((subscriber) => subscriber.chatId === nextSubscriber.chatId) || null;
+}
+
+async function disableTelegramSubscriber(chatId) {
+  const cleanChatId = cleanString(chatId);
+  if (!cleanChatId) return;
+
+  const db = await readDb();
+  const subscriber = db.telegramSubscribers.find((item) => item.chatId === cleanChatId);
+  if (!subscriber) return;
+
+  subscriber.isActive = false;
+  subscriber.updatedAt = nowIso();
+  await writeDb(db);
 }
 
 function sendNotFound(res, label = "Not found.") {
@@ -346,6 +427,84 @@ function clearSessionCookie(res) {
     secure: process.env.NODE_ENV === "production",
     path: "/",
   });
+}
+
+function timingSafeEqualString(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function isAdminPassword(value) {
+  return timingSafeEqualString(value, ADMIN_PASSWORD);
+}
+
+function cleanupAdminLoginTokens() {
+  const now = Date.now();
+  for (const [token, record] of adminLoginTokens.entries()) {
+    if (!record?.expiresAt || record.expiresAt <= now) {
+      adminLoginTokens.delete(token);
+    }
+  }
+}
+
+function publicAppUrl() {
+  const rawUrl = cleanString(process.env.PUBLIC_APP_URL)
+    || cleanString(process.env.APP_URL)
+    || cleanString(process.env.TELEGRAM_WEBAPP_URL)
+    || `http://localhost:${PORT}`;
+
+  try {
+    const url = new URL(rawUrl);
+    url.hash = "";
+    return url;
+  } catch {
+    return new URL(`http://localhost:${PORT}`);
+  }
+}
+
+function createAdminLoginUrl(meta = {}) {
+  cleanupAdminLoginTokens();
+  const token = crypto.randomBytes(32).toString("hex");
+  adminLoginTokens.set(token, {
+    username: ADMIN_USERNAME,
+    telegramChatId: cleanString(meta.telegramChatId),
+    telegramUsername: cleanString(meta.telegramUsername),
+    createdAt: Date.now(),
+    expiresAt: Date.now() + ADMIN_LOGIN_TOKEN_TTL_MS,
+  });
+
+  const url = publicAppUrl();
+  url.pathname = "/admin";
+  url.search = "";
+  url.searchParams.set("adminLoginToken", token);
+  return url.toString();
+}
+
+function redeemAdminLoginToken(token) {
+  cleanupAdminLoginTokens();
+
+  const cleanToken = cleanString(token);
+  const record = adminLoginTokens.get(cleanToken);
+  if (!record || record.expiresAt <= Date.now()) {
+    adminLoginTokens.delete(cleanToken);
+    return null;
+  }
+
+  adminLoginTokens.delete(cleanToken);
+  return record;
+}
+
+function startAdminSession(res, username) {
+  const token = crypto.randomBytes(32).toString("hex");
+  sessions.set(token, {
+    username,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  });
+  setSessionCookie(res, token);
+  return { user: { username } };
 }
 
 function safeUploadName(originalName, extensionOverride = null) {
@@ -431,14 +590,17 @@ app.post("/api/auth/login", async (req, res) => {
     return;
   }
 
-  const token = crypto.randomBytes(32).toString("hex");
-  sessions.set(token, {
-    username,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + SESSION_TTL_MS,
-  });
-  setSessionCookie(res, token);
-  res.json({ user: { username } });
+  res.json(startAdminSession(res, username));
+});
+
+app.post("/api/auth/telegram-admin-login", async (req, res) => {
+  const record = redeemAdminLoginToken(req.body?.token);
+  if (!record) {
+    res.status(401).json({ error: "Token admin non valido o scaduto." });
+    return;
+  }
+
+  res.json(startAdminSession(res, record.username));
 });
 
 app.get("/api/auth/me", (req, res) => {
@@ -460,7 +622,7 @@ app.post("/api/auth/logout", (req, res) => {
 
 app.get("/api/admin/bootstrap", requireAuth, async (_req, res) => {
   const db = await readDb();
-  res.json(db);
+  res.json(adminDb(db));
 });
 
 app.put("/api/admin/settings", requireAuth, async (req, res) => {
@@ -478,6 +640,33 @@ app.put("/api/admin/contacts", requireAuth, async (req, res) => {
     .filter(Boolean);
   const saved = await writeDb(db);
   res.json(saved.contacts);
+});
+
+app.get("/api/admin/broadcast", requireAuth, async (_req, res) => {
+  const db = await readDb();
+  res.json(adminDb(db).broadcast);
+});
+
+app.post("/api/admin/broadcast", requireAuth, async (req, res) => {
+  const message = cleanString(req.body?.message);
+  const buttonText = cleanString(req.body?.buttonText, "Apri Mini App");
+
+  if (!message) {
+    res.status(400).json({ error: "Il testo del broadcast è obbligatorio." });
+    return;
+  }
+
+  const db = await readDb();
+  const result = await sendTelegramBroadcast(activeTelegramSubscribers(db), message, {
+    buttonText,
+    disableSubscriber: disableTelegramSubscriber,
+  });
+
+  const nextDb = await readDb();
+  res.json({
+    ...result,
+    subscriberCount: activeTelegramSubscribers(nextDb).length,
+  });
 });
 
 app.post("/api/admin/categories", requireAuth, async (req, res) => {
@@ -556,11 +745,26 @@ app.get("/api/admin/products", requireAuth, async (_req, res) => {
 
 app.post("/api/admin/products", requireAuth, async (req, res) => {
   const db = await readDb();
+  const notifyTelegram = cleanBoolean(req.body?.notifyTelegram);
   const usedIds = new Set(db.products.map((product) => product.id));
   const product = normalizeProduct(req.body, usedIds);
   db.products.push(product);
   const saved = await writeDb(db);
-  res.status(201).json(saved.products.find((item) => item.id === product.id));
+  const savedProduct = saved.products.find((item) => item.id === product.id);
+  let broadcast = null;
+  let broadcastError = "";
+
+  if (notifyTelegram && savedProduct?.isActive !== false) {
+    try {
+      broadcast = await sendProductBroadcast(activeTelegramSubscribers(saved), savedProduct, {
+        disableSubscriber: disableTelegramSubscriber,
+      });
+    } catch (error) {
+      broadcastError = error.message || "Broadcast non inviato.";
+    }
+  }
+
+  res.status(201).json({ product: savedProduct, broadcast, broadcastError });
 });
 
 app.put("/api/admin/products/:id", requireAuth, async (req, res) => {
@@ -719,5 +923,9 @@ app.listen(PORT, () => {
   console.log(`Jungle Roma server running at http://localhost:${PORT}`);
   console.log(`Frontend mode: ${frontendMode}`);
   console.log(`Admin: http://localhost:${PORT}/admin`);
-  startTelegramBot();
+  startTelegramBot({
+    upsertSubscriber: upsertTelegramSubscriber,
+    verifyAdminPassword: isAdminPassword,
+    createAdminLoginUrl,
+  });
 });

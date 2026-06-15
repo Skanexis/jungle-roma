@@ -7,9 +7,11 @@ import {
   Link2,
   Loader2,
   LogOut,
+  Megaphone,
   Package,
   Plus,
   Save,
+  Send,
   Settings,
   Tags,
   Trash2,
@@ -27,18 +29,21 @@ import {
   deleteAdminProduct,
   deleteAdminProductMedia,
   fetchAdminBootstrap,
+  fetchAdminBroadcastStats,
   fetchAdminMe,
   loginAdmin,
+  loginAdminWithTelegramToken,
   logoutAdmin,
   saveAdminContacts,
   saveAdminSettings,
+  sendAdminBroadcast,
   updateAdminCategory,
   updateAdminProduct,
   uploadAdminProductMedia,
 } from "../services/api";
 import "./admin.css";
 
-type AdminSection = "prodotti" | "categorie" | "contatti" | "settings";
+type AdminSection = "prodotti" | "categorie" | "contatti" | "broadcast" | "settings";
 
 const contactTypes: ContactIconType[] = ["links", "instagram", "telegram", "message", "signal", "user"];
 
@@ -46,7 +51,8 @@ const adminSections: Array<{ id: AdminSection; label: string; icon: ReactNode }>
   { id: "prodotti", label: "Prodotti", icon: <Package size={18} /> },
   { id: "categorie", label: "Categorie", icon: <Tags size={18} /> },
   { id: "contatti", label: "Contatti", icon: <Link2 size={18} /> },
-  { id: "settings", label: "Settings", icon: <Settings size={18} /> },
+  { id: "broadcast", label: "Broadcast", icon: <Megaphone size={18} /> },
+  { id: "settings", label: "Impostazioni", icon: <Settings size={18} /> },
 ];
 
 function blankProduct(category = "Prodotti"): Product {
@@ -127,6 +133,16 @@ function isUnsavedProduct(product: Product) {
   return !product.id;
 }
 
+function consumeAdminLoginTokenFromUrl() {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get("adminLoginToken") || "";
+  if (!token) return "";
+
+  url.searchParams.delete("adminLoginToken");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  return token;
+}
+
 export default function AdminApp() {
   const [authChecked, setAuthChecked] = useState(false);
   const [username, setUsername] = useState<string | null>(null);
@@ -136,6 +152,7 @@ export default function AdminApp() {
   const [section, setSection] = useState<AdminSection>("prodotti");
   const [draft, setDraft] = useState<Product>(() => blankProduct());
   const [selectedProductId, setSelectedProductId] = useState<string>("");
+  const [notifyNewProduct, setNotifyNewProduct] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -150,6 +167,7 @@ export default function AdminApp() {
     const hydratedData = {
       ...nextData,
       products: nextData.products.map(hydrateProduct),
+      broadcast: nextData.broadcast || { subscriberCount: 0, totalSubscriberCount: 0 },
     };
     setData(hydratedData);
     const firstProduct = hydratedData.products[0];
@@ -165,14 +183,24 @@ export default function AdminApp() {
   useEffect(() => {
     let cancelled = false;
 
-    fetchAdminMe()
-      .then(async ({ user }) => {
+    async function boot() {
+      const adminLoginToken = consumeAdminLoginTokenFromUrl();
+      const { user } = adminLoginToken
+        ? await loginAdminWithTelegramToken(adminLoginToken)
+        : await fetchAdminMe();
+
+      if (cancelled) return;
+      setUsername(user.username);
+      await loadAdminData();
+    }
+
+    boot()
+      .catch((error) => {
         if (cancelled) return;
-        setUsername(user.username);
-        await loadAdminData();
-      })
-      .catch(() => {
-        if (!cancelled) setUsername(null);
+        setUsername(null);
+        if (error instanceof Error && error.message.includes("Token admin")) {
+          setMessage(error.message);
+        }
       })
       .finally(() => {
         if (!cancelled) setAuthChecked(true);
@@ -218,6 +246,7 @@ export default function AdminApp() {
   const selectProduct = (product: Product) => {
     setSelectedProductId(product.id);
     setDraft(hydrateProduct(product));
+    setNotifyNewProduct(false);
     setMessage("");
   };
 
@@ -225,6 +254,7 @@ export default function AdminApp() {
     const product = blankProduct(categoryNames[0] || "Prodotti");
     setSelectedProductId("");
     setDraft(product);
+    setNotifyNewProduct(false);
     setSection("prodotti");
     setMessage("");
   };
@@ -232,14 +262,38 @@ export default function AdminApp() {
   const saveProduct = () => {
     runAction(async () => {
       const payload = compactProduct(draft);
-      const saved = isUnsavedProduct(payload)
-        ? await createAdminProduct(payload)
+      const isNewProduct = isUnsavedProduct(payload);
+      const createResult = isNewProduct
+        ? await createAdminProduct(payload, { notifyTelegram: notifyNewProduct })
+        : null;
+      const saved = createResult
+        ? createResult.product
         : await updateAdminProduct(payload);
 
       setData((current) => updateProductInData(current, saved));
       setSelectedProductId(saved.id);
       setDraft(saved);
-    }, "Prodotto salvato");
+      setNotifyNewProduct(false);
+
+      if (createResult?.broadcast) {
+        setData((current) => ({
+          ...current,
+          broadcast: {
+            subscriberCount: createResult.broadcast?.subscriberCount ?? current.broadcast?.subscriberCount ?? 0,
+            totalSubscriberCount: current.broadcast?.totalSubscriberCount,
+          },
+        }));
+        setMessage(`Prodotto salvato. Broadcast inviato a ${createResult.broadcast.sent} iscritti.`);
+        return;
+      }
+
+      if (createResult?.broadcastError) {
+        setMessage(`Prodotto salvato. Broadcast non inviato: ${createResult.broadcastError}`);
+        return;
+      }
+
+      setMessage("Prodotto salvato");
+    });
   };
 
   const removeProduct = (product: Product) => {
@@ -293,6 +347,15 @@ export default function AdminApp() {
       const saved = await saveAdminContacts(data.contacts);
       setData((current) => ({ ...current, contacts: saved }));
     }, "Contatti salvati");
+  };
+
+  const sendBroadcast = (messageText: string, buttonText: string) => {
+    runAction(async () => {
+      const result = await sendAdminBroadcast(messageText, buttonText);
+      const stats = await fetchAdminBroadcastStats();
+      setData((current) => ({ ...current, broadcast: stats }));
+      setMessage(`Broadcast inviato a ${result.sent} iscritti. Errori: ${result.failed}.`);
+    });
   };
 
   const addContact = () => {
@@ -444,6 +507,10 @@ export default function AdminApp() {
             <span>Media</span>
             <strong>{data.products.reduce((total, product) => total + (product.images?.length || 0) + (product.videos?.length || 0), 0)}</strong>
           </div>
+          <div>
+            <span>Iscritti bot</span>
+            <strong>{data.broadcast?.subscriberCount ?? 0}</strong>
+          </div>
         </div>
 
         {section === "prodotti" && (
@@ -457,8 +524,10 @@ export default function AdminApp() {
             onDelete={removeProduct}
             onDeleteMedia={deleteMedia}
             onDraftChange={setDraft}
+            notifyNewProduct={notifyNewProduct}
             onSave={saveProduct}
             onSelect={selectProduct}
+            onNotifyNewProductChange={setNotifyNewProduct}
             onUpload={uploadMedia}
           />
         )}
@@ -484,6 +553,15 @@ export default function AdminApp() {
           />
         )}
 
+        {section === "broadcast" && (
+          <BroadcastAdmin
+            busy={busy}
+            subscriberCount={data.broadcast?.subscriberCount ?? 0}
+            totalSubscriberCount={data.broadcast?.totalSubscriberCount ?? data.broadcast?.subscriberCount ?? 0}
+            onSend={sendBroadcast}
+          />
+        )}
+
         {section === "settings" && (
           <SettingsAdmin settings={data.settings} onSave={saveSettings} onUpdate={(settings) => {
             setData((current) => ({ ...current, settings }));
@@ -504,13 +582,16 @@ function CatalogAdmin({
   onDelete,
   onDeleteMedia,
   onDraftChange,
+  notifyNewProduct,
   onSave,
   onSelect,
+  onNotifyNewProductChange,
   onUpload,
 }: {
   busy: boolean;
   categoryNames: string[];
   draft: Product;
+  notifyNewProduct: boolean;
   products: Product[];
   selectedProductId: string;
   onCreate: () => void;
@@ -519,6 +600,7 @@ function CatalogAdmin({
   onDraftChange: (product: Product) => void;
   onSave: () => void;
   onSelect: (product: Product) => void;
+  onNotifyNewProductChange: (value: boolean) => void;
   onUpload: (images: File[], videos: File[]) => void;
 }) {
   return (
@@ -615,6 +697,16 @@ function CatalogAdmin({
             />
             Visibile sul sito
           </label>
+          {!draft.id && (
+            <label className="admin-check">
+              <input
+                checked={notifyNewProduct}
+                onChange={(event) => onNotifyNewProductChange(event.target.checked)}
+                type="checkbox"
+              />
+              Invia broadcast Telegram dopo il salvataggio
+            </label>
+          )}
         </div>
 
         <PriceEditor draft={draft} onDraftChange={onDraftChange} />
@@ -994,6 +1086,60 @@ function ContactsAdmin({
   );
 }
 
+function BroadcastAdmin({
+  busy,
+  subscriberCount,
+  totalSubscriberCount,
+  onSend,
+}: {
+  busy: boolean;
+  subscriberCount: number;
+  totalSubscriberCount: number;
+  onSend: (message: string, buttonText: string) => void;
+}) {
+  const [message, setMessage] = useState("");
+  const [buttonText, setButtonText] = useState("Apri Mini App");
+  const canSend = message.trim().length > 0 && subscriberCount > 0 && !busy;
+
+  return (
+    <section className="admin-panel admin-settings">
+      <div className="admin-panel-head">
+        <div>
+          <h3>Broadcast Telegram</h3>
+          <p className="admin-muted">
+            {subscriberCount} iscritti attivi
+            {totalSubscriberCount !== subscriberCount ? ` / ${totalSubscriberCount} totali` : ""}
+          </p>
+        </div>
+        <button type="button" disabled={!canSend} onClick={() => onSend(message, buttonText)}>
+          {busy ? <Loader2 className="admin-spin" size={16} /> : <Send size={16} />}
+          Invia
+        </button>
+      </div>
+
+      <label>
+        Testo messaggio
+        <textarea
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          placeholder="Scrivi il messaggio da inviare agli iscritti Telegram..."
+        />
+      </label>
+
+      <label>
+        Testo pulsante Mini App
+        <input value={buttonText} onChange={(event) => setButtonText(event.target.value)} />
+      </label>
+
+      {subscriberCount === 0 && (
+        <p className="admin-muted">
+          Nessun iscritto attivo. Gli utenti vengono aggiunti quando scrivono al bot o usano /start.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function SettingsAdmin({
   settings,
   onSave,
@@ -1006,7 +1152,7 @@ function SettingsAdmin({
   return (
     <section className="admin-panel admin-settings">
       <div className="admin-panel-head">
-        <h3>Settings</h3>
+        <h3>Impostazioni</h3>
         <button type="button" onClick={() => onSave(settings)}>
           <Save size={16} />
           Salva

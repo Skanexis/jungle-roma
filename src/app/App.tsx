@@ -44,6 +44,17 @@ const variants = {
   }),
 };
 
+function readProductLinkParams() {
+  const params = new URLSearchParams(window.location.search);
+  const productId = params.get("product") || "";
+  const section = params.get("section");
+
+  return {
+    productId,
+    section: section === "catalog" || productId ? "catalog" as SectionId : null,
+  };
+}
+
 async function fetchPublicDataWithFallback() {
   let timeoutId: number | undefined;
 
@@ -67,6 +78,23 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<SectionId>("home");
   const [direction, setDirection] = useState(1);
   const [siteData, setSiteData] = useState<SiteData>(() => getFallbackSiteData());
+  const [productToOpenId, setProductToOpenId] = useState(() => readProductLinkParams().productId);
+
+  useEffect(() => {
+    const params = readProductLinkParams();
+    if (params.section) {
+      setActiveSection(params.section);
+    }
+
+    const handlePopState = () => {
+      const nextParams = readProductLinkParams();
+      if (nextParams.section) setActiveSection(nextParams.section);
+      setProductToOpenId(nextParams.productId);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,7 +195,9 @@ export default function App() {
               <CatalogSection
                 categories={siteData.categories}
                 orderHref={siteData.settings.orderUrl}
+                productToOpenId={productToOpenId}
                 products={siteData.products}
+                onProductOpened={() => setProductToOpenId("")}
               />
             )}
             {activeSection === "contacts" && <ContactsSection contacts={siteData.contacts} />}
