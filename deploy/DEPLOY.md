@@ -310,3 +310,13 @@ docker compose up -d
 nginx -t
 systemctl reload nginx
 ```
+
+## 14. Если Docker пишет `"/public": not found`
+
+Это означает, что на VPS старая версия `Dockerfile`, где пытались копировать пустую папку `public/`. Подтяните актуальный код и пересоберите:
+
+```bash
+cd /opt/jungle-roma
+git pull --ff-only
+docker compose up -d --build
+```

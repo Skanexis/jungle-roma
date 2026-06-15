@@ -34,7 +34,6 @@ COPY --from=prod-deps --chown=jungle:jungle /app/node_modules ./node_modules
 COPY --from=build --chown=jungle:jungle /app/dist ./dist
 COPY --chown=jungle:jungle package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=jungle:jungle server ./server
-COPY --chown=jungle:jungle public ./public
 
 USER jungle
 EXPOSE 3001
