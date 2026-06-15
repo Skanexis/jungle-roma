@@ -1,0 +1,13 @@
+.cloudflared-tunnel/
+.git/
+.env
+.env.*
+dist/
+node_modules/
+screenshots-*/
+server-*.log
+vite-*.log
+*.log
+npm-debug.log*
+pnpm-debug.log*
+public/uploads/

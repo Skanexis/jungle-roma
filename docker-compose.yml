@@ -1,0 +1,29 @@
+services:
+  jungle-roma:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jungle-roma:latest
+    container_name: jungle-roma
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    ports:
+      - "${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-43187}:3001"
+    volumes:
+      - jungle_roma_data:/app/server/data
+      - jungle_roma_uploads:/app/public/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  jungle_roma_data:
+  jungle_roma_uploads:

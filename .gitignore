@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+public/uploads/
+.cloudflared-tunnel/
+screenshots-*/
+server-*.log
+vite-*.log
+*.log
+npm-debug.log*
+pnpm-debug.log*
