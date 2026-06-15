@@ -83,6 +83,7 @@ const EMPTY_DB = {
   contacts: [],
   products: [],
   telegramSubscribers: [],
+  telegramBroadcastMessages: [],
 };
 
 const upload = multer({
@@ -228,6 +229,20 @@ function normalizeTelegramSubscriber(subscriber = {}) {
   };
 }
 
+function normalizeTelegramBroadcastMessage(message = {}) {
+  const chatId = cleanString(message.chatId);
+  const messageId = Number(message.messageId);
+  if (!chatId || !Number.isFinite(messageId)) return null;
+
+  return {
+    chatId,
+    messageId,
+    createdAt: cleanString(message.createdAt, nowIso()),
+    deleteAt: cleanString(message.deleteAt, nowIso()),
+    deletedAt: cleanString(message.deletedAt),
+  };
+}
+
 function normalizeProduct(product = {}, usedIds = new Set(), existing = null, options = {}) {
   const name = cleanString(product.name);
   if (!name) {
@@ -286,6 +301,9 @@ function normalizeDb(db) {
       .filter(Boolean),
     telegramSubscribers: (Array.isArray(db?.telegramSubscribers) ? db.telegramSubscribers : [])
       .map(normalizeTelegramSubscriber)
+      .filter(Boolean),
+    telegramBroadcastMessages: (Array.isArray(db?.telegramBroadcastMessages) ? db.telegramBroadcastMessages : [])
+      .map(normalizeTelegramBroadcastMessage)
       .filter(Boolean),
   };
 }
@@ -378,6 +396,47 @@ async function disableTelegramSubscriber(chatId) {
   subscriber.isActive = false;
   subscriber.updatedAt = nowIso();
   await writeDb(db);
+}
+
+async function trackTelegramBroadcastMessage(record = {}) {
+  const nextRecord = normalizeTelegramBroadcastMessage(record);
+  if (!nextRecord) return null;
+
+  const db = await readDb();
+  const exists = db.telegramBroadcastMessages.some((message) => (
+    message.chatId === nextRecord.chatId && message.messageId === nextRecord.messageId
+  ));
+
+  if (!exists) {
+    db.telegramBroadcastMessages.push(nextRecord);
+    await writeDb(db);
+  }
+
+  return nextRecord;
+}
+
+async function markTelegramBroadcastMessageDeleted(record = {}) {
+  const chatId = cleanString(record.chatId);
+  const messageId = Number(record.messageId);
+  if (!chatId || !Number.isFinite(messageId)) return;
+
+  const db = await readDb();
+  let changed = false;
+
+  db.telegramBroadcastMessages = db.telegramBroadcastMessages.map((message) => {
+    if (message.chatId !== chatId || message.messageId !== messageId) return message;
+    changed = true;
+    return { ...message, deletedAt: message.deletedAt || nowIso() };
+  });
+
+  if (changed) {
+    await writeDb(db);
+  }
+}
+
+async function getPendingTelegramBroadcastMessages() {
+  const db = await readDb();
+  return db.telegramBroadcastMessages.filter((message) => !message.deletedAt);
 }
 
 function sendNotFound(res, label = "Not found.") {
@@ -660,6 +719,8 @@ app.post("/api/admin/broadcast", requireAuth, async (req, res) => {
   const result = await sendTelegramBroadcast(activeTelegramSubscribers(db), message, {
     buttonText,
     disableSubscriber: disableTelegramSubscriber,
+    trackBroadcastMessage: trackTelegramBroadcastMessage,
+    markBroadcastMessageDeleted: markTelegramBroadcastMessageDeleted,
   });
 
   const nextDb = await readDb();
@@ -758,6 +819,8 @@ app.post("/api/admin/products", requireAuth, async (req, res) => {
     try {
       broadcast = await sendProductBroadcast(activeTelegramSubscribers(saved), savedProduct, {
         disableSubscriber: disableTelegramSubscriber,
+        trackBroadcastMessage: trackTelegramBroadcastMessage,
+        markBroadcastMessageDeleted: markTelegramBroadcastMessageDeleted,
       });
     } catch (error) {
       broadcastError = error.message || "Broadcast non inviato.";
@@ -927,5 +990,7 @@ app.listen(PORT, () => {
     upsertSubscriber: upsertTelegramSubscriber,
     verifyAdminPassword: isAdminPassword,
     createAdminLoginUrl,
+    getPendingBroadcastMessages: getPendingTelegramBroadcastMessages,
+    markBroadcastMessageDeleted: markTelegramBroadcastMessageDeleted,
   });
 });

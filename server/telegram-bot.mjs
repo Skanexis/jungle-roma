@@ -4,7 +4,9 @@ const BROADCAST_DELAY_MS = 45;
 const ADMIN_ACCESS_TRIGGER = "tropico6";
 const ADMIN_PASSWORD_WAIT_MS = 1000 * 60 * 3;
 const CHAT_INACTIVITY_DELETE_MS = 1000 * 60 * 3;
+const BROADCAST_DELETE_MS = 1000 * 60 * 60 * 36;
 const chatCleanupState = new Map();
+const broadcastDeleteTimers = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -105,7 +107,7 @@ function getChatCleanupState(token, chatId) {
     token,
     chatId: key,
     lastActivityAt: Date.now(),
-    messageIds: new Set(),
+    messageId: null,
     timer: null,
   };
   chatCleanupState.set(key, next);
@@ -113,12 +115,10 @@ function getChatCleanupState(token, chatId) {
 }
 
 async function deleteTrackedBotMessages(state) {
-  const messageIds = Array.from(state.messageIds);
-  state.messageIds.clear();
-
-  for (const messageId of messageIds) {
-    await deleteTelegramMessage(state.token, state.chatId, messageId);
-  }
+  if (!state.messageId) return;
+  const messageId = state.messageId;
+  state.messageId = null;
+  await deleteTelegramMessage(state.token, state.chatId, messageId);
 }
 
 async function deleteTelegramMessage(token, chatId, messageId) {
@@ -137,6 +137,23 @@ async function deleteTelegramMessage(token, chatId, messageId) {
 async function deleteIncomingPrivateMessage(token, message) {
   if (message?.chat?.type !== "private") return;
   await deleteTelegramMessage(token, message.chat.id, message.message_id);
+}
+
+function isMessageNotModifiedError(error) {
+  return String(error?.message || "").toLowerCase().includes("message is not modified");
+}
+
+function editPayloadFromSendPayload(payload, messageId) {
+  const hasReplyMarkup = Object.prototype.hasOwnProperty.call(payload, "reply_markup");
+
+  return {
+    chat_id: payload.chat_id,
+    message_id: messageId,
+    text: payload.text,
+    parse_mode: payload.parse_mode,
+    disable_web_page_preview: payload.disable_web_page_preview,
+    reply_markup: hasReplyMarkup ? payload.reply_markup : { inline_keyboard: [] },
+  };
 }
 
 function scheduleChatCleanup(state) {
@@ -174,13 +191,81 @@ function trackBotMessage(token, chatId, message) {
   if (!state) return;
 
   state.lastActivityAt = Date.now();
-  state.messageIds.add(message.message_id);
+  state.messageId = message.message_id;
   scheduleChatCleanup(state);
 }
 
 async function sendTelegramMessage(token, payload) {
+  const state = getChatCleanupState(token, payload.chat_id);
+  if (state?.messageId) {
+    try {
+      const edited = await telegramApi(token, "editMessageText", editPayloadFromSendPayload(payload, state.messageId));
+      state.lastActivityAt = Date.now();
+      scheduleChatCleanup(state);
+      return edited;
+    } catch (error) {
+      if (isMessageNotModifiedError(error)) {
+        state.lastActivityAt = Date.now();
+        scheduleChatCleanup(state);
+        return null;
+      }
+      state.messageId = null;
+    }
+  }
+
   const message = await telegramApi(token, "sendMessage", payload);
   trackBotMessage(token, payload.chat_id, message);
+  return message;
+}
+
+function broadcastDeleteKey(chatId, messageId) {
+  return `${chatId}:${messageId}`;
+}
+
+async function deleteBroadcastMessage(token, record, options = {}) {
+  await deleteTelegramMessage(token, record.chatId, record.messageId);
+  await options.markBroadcastMessageDeleted?.(record);
+}
+
+export function scheduleBroadcastMessageDeletion(record, options = {}) {
+  const config = getTelegramConfig();
+  if (!config.token || !record?.chatId || !record?.messageId) return;
+
+  const key = broadcastDeleteKey(record.chatId, record.messageId);
+  const existingTimer = broadcastDeleteTimers.get(key);
+  if (existingTimer) clearTimeout(existingTimer);
+
+  const deleteAtMs = Number.isFinite(record.deleteAtMs)
+    ? record.deleteAtMs
+    : Date.parse(record.deleteAt || "");
+  const delay = Math.max(0, (deleteAtMs || Date.now()) - Date.now());
+
+  const timer = setTimeout(async () => {
+    broadcastDeleteTimers.delete(key);
+    await deleteBroadcastMessage(config.token, record, options);
+  }, delay);
+
+  broadcastDeleteTimers.set(key, timer);
+}
+
+async function sendBroadcastMessage(token, payload, options = {}) {
+  const message = await telegramApi(token, "sendMessage", payload);
+
+  if (message?.message_id) {
+    const deleteAtMs = Date.now() + BROADCAST_DELETE_MS;
+    const record = {
+      chatId: String(payload.chat_id),
+      messageId: message.message_id,
+      createdAt: new Date().toISOString(),
+      deleteAt: new Date(deleteAtMs).toISOString(),
+      deleteAtMs,
+    };
+    await options.trackBroadcastMessage?.(record);
+    scheduleBroadcastMessageDeletion(record, {
+      markBroadcastMessageDeleted: options.markBroadcastMessageDeleted,
+    });
+  }
+
   return message;
 }
 
@@ -358,13 +443,17 @@ export async function sendTelegramBroadcast(subscribers, message, options = {}) 
     }
 
     try {
-      await sendTelegramMessage(config.token, {
-        chat_id: subscriber.chatId,
-        text,
-        parse_mode: options.parseMode || undefined,
-        disable_web_page_preview: true,
-        reply_markup: miniAppKeyboard(buttonUrl, buttonText),
-      });
+      await sendBroadcastMessage(
+        config.token,
+        {
+          chat_id: subscriber.chatId,
+          text,
+          parse_mode: options.parseMode || undefined,
+          disable_web_page_preview: true,
+          reply_markup: miniAppKeyboard(buttonUrl, buttonText),
+        },
+        options,
+      );
       result.sent += 1;
     } catch (error) {
       result.failed += 1;
@@ -459,6 +548,12 @@ export function startTelegramBot(options = {}) {
   async function boot() {
     try {
       await configureBot(config.token, config.webAppUrl, config.buttonText);
+      const pendingBroadcastMessages = await options.getPendingBroadcastMessages?.();
+      for (const record of pendingBroadcastMessages || []) {
+        scheduleBroadcastMessageDeletion(record, {
+          markBroadcastMessageDeleted: options.markBroadcastMessageDeleted,
+        });
+      }
       console.log("Telegram bot is running in long polling mode.");
       await pollingLoop();
     } catch (error) {
