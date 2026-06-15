@@ -3,6 +3,8 @@ const DISABLED_VALUES = new Set(["0", "false", "off", "no"]);
 const BROADCAST_DELAY_MS = 45;
 const ADMIN_ACCESS_TRIGGER = "tropico6";
 const ADMIN_PASSWORD_WAIT_MS = 1000 * 60 * 3;
+const CHAT_INACTIVITY_DELETE_MS = 1000 * 60 * 3;
+const chatCleanupState = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -85,6 +87,103 @@ async function telegramApi(token, method, payload = {}) {
   return body?.result;
 }
 
+function cleanupStateKey(chatId) {
+  return String(chatId || "");
+}
+
+function getChatCleanupState(token, chatId) {
+  const key = cleanupStateKey(chatId);
+  if (!key) return null;
+
+  const existing = chatCleanupState.get(key);
+  if (existing) {
+    existing.token = token || existing.token;
+    return existing;
+  }
+
+  const next = {
+    token,
+    chatId: key,
+    lastActivityAt: Date.now(),
+    messageIds: new Set(),
+    timer: null,
+  };
+  chatCleanupState.set(key, next);
+  return next;
+}
+
+async function deleteTrackedBotMessages(state) {
+  const messageIds = Array.from(state.messageIds);
+  state.messageIds.clear();
+
+  for (const messageId of messageIds) {
+    await deleteTelegramMessage(state.token, state.chatId, messageId);
+  }
+}
+
+async function deleteTelegramMessage(token, chatId, messageId) {
+  if (!chatId || !messageId) return;
+
+  try {
+    await telegramApi(token, "deleteMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  } catch {
+    // The message may already be gone, too old, or not deletable in this chat.
+  }
+}
+
+async function deleteIncomingPrivateMessage(token, message) {
+  if (message?.chat?.type !== "private") return;
+  await deleteTelegramMessage(token, message.chat.id, message.message_id);
+}
+
+function scheduleChatCleanup(state) {
+  if (!state) return;
+  if (state.timer) clearTimeout(state.timer);
+
+  state.timer = setTimeout(async () => {
+    const currentState = chatCleanupState.get(state.chatId);
+    if (!currentState) return;
+
+    const inactiveFor = Date.now() - currentState.lastActivityAt;
+    if (inactiveFor < CHAT_INACTIVITY_DELETE_MS) {
+      scheduleChatCleanup(currentState);
+      return;
+    }
+
+    await deleteTrackedBotMessages(currentState);
+    if (currentState.timer) clearTimeout(currentState.timer);
+    chatCleanupState.delete(currentState.chatId);
+  }, CHAT_INACTIVITY_DELETE_MS + 250);
+}
+
+function markChatActivity(token, chatId) {
+  const state = getChatCleanupState(token, chatId);
+  if (!state) return;
+
+  state.lastActivityAt = Date.now();
+  scheduleChatCleanup(state);
+}
+
+function trackBotMessage(token, chatId, message) {
+  if (!message?.message_id) return;
+
+  const state = getChatCleanupState(token, chatId);
+  if (!state) return;
+
+  state.lastActivityAt = Date.now();
+  state.messageIds.add(message.message_id);
+  scheduleChatCleanup(state);
+}
+
+async function sendTelegramMessage(token, payload) {
+  const message = await telegramApi(token, "sendMessage", payload);
+  trackBotMessage(token, payload.chat_id, message);
+  return message;
+}
+
 function miniAppKeyboard(webAppUrl, buttonText) {
   return {
     inline_keyboard: [
@@ -124,7 +223,7 @@ async function configureBot(token, webAppUrl, buttonText) {
 }
 
 async function sendMiniAppInvite(token, chatId, webAppUrl, buttonText, welcomeText) {
-  await telegramApi(token, "sendMessage", {
+  await sendTelegramMessage(token, {
     chat_id: chatId,
     text: welcomeText,
     disable_web_page_preview: true,
@@ -133,14 +232,14 @@ async function sendMiniAppInvite(token, chatId, webAppUrl, buttonText, welcomeTe
 }
 
 async function sendAdminPasswordRequest(token, chatId) {
-  await telegramApi(token, "sendMessage", {
+  await sendTelegramMessage(token, {
     chat_id: chatId,
     text: "Inserisci la password admin.",
   });
 }
 
 async function sendAdminLoginButton(token, chatId, adminUrl) {
-  await telegramApi(token, "sendMessage", {
+  await sendTelegramMessage(token, {
     chat_id: chatId,
     text: "Password corretta. Apri il pannello admin.",
     disable_web_page_preview: true,
@@ -151,6 +250,8 @@ async function sendAdminLoginButton(token, chatId, adminUrl) {
 async function handleUpdate(token, update, webAppUrl, buttonText, welcomeText, options = {}) {
   const message = update.message;
   if (!message?.chat?.id) return;
+  markChatActivity(token, message.chat.id);
+  await deleteIncomingPrivateMessage(token, message);
 
   if (message.chat.type === "private") {
     await options.upsertSubscriber?.({
@@ -169,7 +270,7 @@ async function handleUpdate(token, update, webAppUrl, buttonText, welcomeText, o
   const isKnownCommand = command === "/start" || command === "/app" || command === "/menu";
 
   if (message.web_app_data) {
-    await telegramApi(token, "sendMessage", {
+    await sendTelegramMessage(token, {
       chat_id: message.chat.id,
       text: "Ricevuto.",
     });
@@ -187,7 +288,7 @@ async function handleUpdate(token, update, webAppUrl, buttonText, welcomeText, o
     options.adminPasswordRequests.delete(chatId);
 
     if (passwordRequestExpiresAt <= Date.now()) {
-      await telegramApi(token, "sendMessage", {
+      await sendTelegramMessage(token, {
         chat_id: chatId,
         text: "Richiesta scaduta. Scrivi di nuovo Tropico6.",
       });
@@ -195,7 +296,7 @@ async function handleUpdate(token, update, webAppUrl, buttonText, welcomeText, o
     }
 
     if (!options.verifyAdminPassword?.(text)) {
-      await telegramApi(token, "sendMessage", {
+      await sendTelegramMessage(token, {
         chat_id: chatId,
         text: "Password non corretta.",
       });
@@ -208,7 +309,7 @@ async function handleUpdate(token, update, webAppUrl, buttonText, welcomeText, o
     });
 
     if (!adminUrl) {
-      await telegramApi(token, "sendMessage", {
+      await sendTelegramMessage(token, {
         chat_id: chatId,
         text: "Accesso admin non configurato.",
       });
@@ -257,7 +358,7 @@ export async function sendTelegramBroadcast(subscribers, message, options = {}) 
     }
 
     try {
-      await telegramApi(config.token, "sendMessage", {
+      await sendTelegramMessage(config.token, {
         chat_id: subscriber.chatId,
         text,
         parse_mode: options.parseMode || undefined,
