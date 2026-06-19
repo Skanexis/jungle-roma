@@ -137,7 +137,7 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 bottom: 11.6%;
                 display: grid;
                 grid-template-columns: minmax(0, 1fr);
-                grid-template-rows: clamp(198px, 28vh, 232px) auto auto;
+                grid-template-rows: clamp(192px, 27.2vh, 225px) auto auto;
                 row-gap: clamp(8px, 1.1vw, 12px);
               }
 
@@ -155,7 +155,7 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 background: transparent;
                 box-shadow: none;
                 left: clamp(4px, 0.4vw, 8px);
-                top: clamp(12px, 1.4vw, 18px);
+                top: clamp(16px, 1.6vw, 22px);
               }
 
               .product-detail-media::after {
@@ -267,12 +267,12 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
 
                 .product-detail-media {
                   align-self: center;
-                  height: clamp(163px, 29.5svh, 224px);
+                  height: clamp(158px, 28.6svh, 217px);
                   width: min(82%, 286px);
                   flex-shrink: 0;
                   border-radius: clamp(14px, 4vw, 18px);
                   left: 8px;
-                  top: 14px;
+                  top: 18px;
                 }
 
                 .product-detail-info {
@@ -343,10 +343,10 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 }
 
                 .product-detail-media {
-                  height: clamp(118px, 21.85svh, 150px);
+                  height: clamp(114px, 21.2svh, 146px);
                   width: min(76%, 250px);
                   left: 4px;
-                  top: 12px;
+                  top: 16px;
                   margin-bottom: 8px;
                 }
 
