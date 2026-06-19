@@ -1,7 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 const TELEGRAM_API_ROOT = "https://api.telegram.org/bot";
 const DISABLED_VALUES = new Set(["0", "false", "off", "no"]);
 const BROADCAST_DELAY_MS = 45;
@@ -29,11 +25,9 @@ const START_INFO_TEXT = [
   "Verifica Obbligatoria",
   "Possibilità orari extra su richiesta",
 ].join("\n");
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(__dirname, "..");
-const DEFAULT_BOT_LOGO_PATH = path.join(rootDir, "assets", "logo.jpg");
 const chatCleanupState = new Map();
 const broadcastDeleteTimers = new Map();
+const botProfilePhotoCache = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -77,24 +71,8 @@ function getTelegramConfig() {
     webAppUrl,
     buttonText: env("TELEGRAM_MINI_APP_BUTTON_TEXT", "Mini App"),
     contactUrl: env("TELEGRAM_CONTACT_URL"),
-    logoPath: resolveBotLogoPath(),
     welcomeText: env("TELEGRAM_BOT_WELCOME_TEXT", "Apri Jungle Roma dentro Telegram."),
   };
-}
-
-function resolveBotLogoPath() {
-  const configuredPath = env("TELEGRAM_BOT_LOGO_PATH");
-  if (!configuredPath) return DEFAULT_BOT_LOGO_PATH;
-  return path.isAbsolute(configuredPath)
-    ? configuredPath
-    : path.resolve(rootDir, configuredPath);
-}
-
-function mimeTypeForPath(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".png") return "image/png";
-  if (ext === ".webp") return "image/webp";
-  return "image/jpeg";
 }
 
 function validTelegramUrl(value) {
@@ -142,29 +120,39 @@ async function telegramApi(token, method, payload = {}) {
   return body?.result;
 }
 
-async function telegramApiFormData(token, method, formData) {
-  const response = await fetch(`${TELEGRAM_API_ROOT}${token}/${method}`, {
-    method: "POST",
-    body: formData,
-  });
-
-  let body = null;
-  try {
-    body = await response.json();
-  } catch {
-    // Telegram normally returns JSON, but keep the error useful if it does not.
-  }
-
-  if (!response.ok || body?.ok === false) {
-    const description = body?.description || response.statusText || "Telegram API error";
-    throw new Error(`${method}: ${description}`);
-  }
-
-  return body?.result;
-}
-
 function cleanupStateKey(chatId) {
   return String(chatId || "");
+}
+
+function largestPhotoSize(photoSizes = []) {
+  return [...photoSizes]
+    .filter((photo) => photo?.file_id)
+    .sort((left, right) => {
+      const leftScore = Number(left.file_size) || Number(left.width) * Number(left.height) || 0;
+      const rightScore = Number(right.file_size) || Number(right.width) * Number(right.height) || 0;
+      return rightScore - leftScore;
+    })[0] || null;
+}
+
+async function getBotProfilePhotoFileId(token) {
+  if (botProfilePhotoCache.has(token)) {
+    return botProfilePhotoCache.get(token);
+  }
+
+  try {
+    const bot = await telegramApi(token, "getMe");
+    const photos = await telegramApi(token, "getUserProfilePhotos", {
+      user_id: bot.id,
+      limit: 1,
+    });
+    const fileId = largestPhotoSize(photos?.photos?.[0])?.file_id || "";
+    botProfilePhotoCache.set(token, fileId);
+    return fileId;
+  } catch (error) {
+    console.warn(`Telegram bot profile photo lookup failed: ${error.message}`);
+    botProfilePhotoCache.set(token, "");
+    return "";
+  }
 }
 
 function getChatCleanupState(token, chatId) {
@@ -292,29 +280,16 @@ async function sendTelegramMessage(token, payload) {
   return message;
 }
 
-async function sendTelegramPhoto(token, payload, photoPath) {
+async function sendTelegramPhotoByFileId(token, payload, photoFileId) {
   const state = getChatCleanupState(token, payload.chat_id);
   if (state?.messageId) {
     await deleteTrackedBotMessages(state);
   }
 
-  const formData = new FormData();
-  const file = await fs.readFile(photoPath);
-  const blob = new Blob([file], { type: mimeTypeForPath(photoPath) });
-
-  formData.append("chat_id", String(payload.chat_id));
-  formData.append("photo", blob, path.basename(photoPath));
-
-  if (payload.caption) formData.append("caption", payload.caption);
-  if (payload.parse_mode) formData.append("parse_mode", payload.parse_mode);
-  if (payload.disable_notification !== undefined) {
-    formData.append("disable_notification", String(payload.disable_notification));
-  }
-  if (payload.reply_markup) {
-    formData.append("reply_markup", JSON.stringify(payload.reply_markup));
-  }
-
-  const message = await telegramApiFormData(token, "sendPhoto", formData);
+  const message = await telegramApi(token, "sendPhoto", {
+    ...payload,
+    photo: photoFileId,
+  });
   trackBotMessage(token, payload.chat_id, message);
   return message;
 }
@@ -436,16 +411,18 @@ async function configureBot(token, webAppUrl, buttonText) {
   });
 }
 
-async function sendStartMenu(token, chatId, webAppUrl, contactUrl, logoPath, welcomeText) {
+async function sendStartMenu(token, chatId, webAppUrl, contactUrl, welcomeText) {
   const replyMarkup = startMenuKeyboard(webAppUrl, contactUrl);
+  const photoFileId = await getBotProfilePhotoFileId(token);
 
   try {
-    await sendTelegramPhoto(token, {
+    if (!photoFileId) throw new Error("Bot profile photo is not set.");
+    await sendTelegramPhotoByFileId(token, {
       chat_id: chatId,
       reply_markup: replyMarkup,
-    }, logoPath);
+    }, photoFileId);
   } catch (error) {
-    console.warn(`Telegram bot logo send failed: ${error.message}`);
+    console.warn(`Telegram bot profile photo send failed: ${error.message}`);
     const state = getChatCleanupState(token, chatId);
     if (state) state.messageId = null;
     await sendTelegramMessage(token, {
@@ -596,7 +573,7 @@ async function handleUpdate(token, update, webAppUrl, buttonText, welcomeText, o
 
   if (chatType === "private" || isKnownCommand) {
     const contactUrl = await resolveContactUrl(options, webAppUrl);
-    await sendStartMenu(token, message.chat.id, webAppUrl, contactUrl, options.logoPath || getTelegramConfig().logoPath, welcomeText);
+    await sendStartMenu(token, message.chat.id, webAppUrl, contactUrl, welcomeText);
   }
 }
 
@@ -723,7 +700,7 @@ export function startTelegramBot(options = {}) {
             config.webAppUrl,
             config.buttonText,
             config.welcomeText,
-            { ...options, adminPasswordRequests, logoPath: config.logoPath },
+            { ...options, adminPasswordRequests },
           );
         }
       } catch (error) {
