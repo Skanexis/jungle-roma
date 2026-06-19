@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 const TELEGRAM_API_ROOT = "https://api.telegram.org/bot";
 const DISABLED_VALUES = new Set(["0", "false", "off", "no"]);
 const BROADCAST_DELAY_MS = 45;
@@ -5,6 +9,29 @@ const ADMIN_ACCESS_TRIGGER = "tropico6";
 const ADMIN_PASSWORD_WAIT_MS = 1000 * 60 * 3;
 const CHAT_INACTIVITY_DELETE_MS = 1000 * 60 * 3;
 const BROADCAST_DELETE_MS = 1000 * 60 * 60 * 36;
+const START_INFO_CALLBACK = "jr_start_info";
+const START_INFO_TEXT = [
+  "SHIP🇮🇹",
+  "Stealth",
+  "Reship 100% T.O.S.",
+  "Spedizioni giorno dopo al pagamento",
+  "Possibilità ship Refrigerata o con Gps",
+  "",
+  "MEET UP ROMA📌",
+  "Lunedi-Sabato",
+  "15:00-20:00",
+  "Verifica Obbligatoria",
+  "Possibilità orari extra su richiesta",
+  "",
+  "DELIVERY ROMA🛵",
+  "Lunedi-Sabato",
+  "15:00-20:00",
+  "Verifica Obbligatoria",
+  "Possibilità orari extra su richiesta",
+].join("\n");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(__dirname, "..");
+const DEFAULT_BOT_LOGO_PATH = path.join(rootDir, "assets", "logo.jpg");
 const chatCleanupState = new Map();
 const broadcastDeleteTimers = new Map();
 
@@ -48,9 +75,35 @@ function getTelegramConfig() {
   return {
     token,
     webAppUrl,
-    buttonText: env("TELEGRAM_MINI_APP_BUTTON_TEXT", "Apri Jungle Roma"),
+    buttonText: env("TELEGRAM_MINI_APP_BUTTON_TEXT", "Mini App"),
+    contactUrl: env("TELEGRAM_CONTACT_URL"),
+    logoPath: resolveBotLogoPath(),
     welcomeText: env("TELEGRAM_BOT_WELCOME_TEXT", "Apri Jungle Roma dentro Telegram."),
   };
+}
+
+function resolveBotLogoPath() {
+  const configuredPath = env("TELEGRAM_BOT_LOGO_PATH");
+  if (!configuredPath) return DEFAULT_BOT_LOGO_PATH;
+  return path.isAbsolute(configuredPath)
+    ? configuredPath
+    : path.resolve(rootDir, configuredPath);
+}
+
+function mimeTypeForPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".png") return "image/png";
+  if (ext === ".webp") return "image/webp";
+  return "image/jpeg";
+}
+
+function validTelegramUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
 }
 
 function escapeHtml(value) {
@@ -72,6 +125,27 @@ async function telegramApi(token, method, payload = {}) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
+  });
+
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    // Telegram normally returns JSON, but keep the error useful if it does not.
+  }
+
+  if (!response.ok || body?.ok === false) {
+    const description = body?.description || response.statusText || "Telegram API error";
+    throw new Error(`${method}: ${description}`);
+  }
+
+  return body?.result;
+}
+
+async function telegramApiFormData(token, method, formData) {
+  const response = await fetch(`${TELEGRAM_API_ROOT}${token}/${method}`, {
+    method: "POST",
+    body: formData,
   });
 
   let body = null;
@@ -218,6 +292,33 @@ async function sendTelegramMessage(token, payload) {
   return message;
 }
 
+async function sendTelegramPhoto(token, payload, photoPath) {
+  const state = getChatCleanupState(token, payload.chat_id);
+  if (state?.messageId) {
+    await deleteTrackedBotMessages(state);
+  }
+
+  const formData = new FormData();
+  const file = await fs.readFile(photoPath);
+  const blob = new Blob([file], { type: mimeTypeForPath(photoPath) });
+
+  formData.append("chat_id", String(payload.chat_id));
+  formData.append("photo", blob, path.basename(photoPath));
+
+  if (payload.caption) formData.append("caption", payload.caption);
+  if (payload.parse_mode) formData.append("parse_mode", payload.parse_mode);
+  if (payload.disable_notification !== undefined) {
+    formData.append("disable_notification", String(payload.disable_notification));
+  }
+  if (payload.reply_markup) {
+    formData.append("reply_markup", JSON.stringify(payload.reply_markup));
+  }
+
+  const message = await telegramApiFormData(token, "sendPhoto", formData);
+  trackBotMessage(token, payload.chat_id, message);
+  return message;
+}
+
 function broadcastDeleteKey(chatId, messageId) {
   return `${chatId}:${messageId}`;
 }
@@ -282,6 +383,34 @@ function miniAppKeyboard(webAppUrl, buttonText) {
   };
 }
 
+function startMenuKeyboard(webAppUrl, contactUrl) {
+  const keyboard = [
+    [
+      {
+        text: "ℹ️ Informazioni",
+        callback_data: START_INFO_CALLBACK,
+      },
+      {
+        text: "🔞 Contatto",
+        url: validTelegramUrl(contactUrl) || webAppUrl,
+      },
+    ],
+    [
+      {
+        text: "📱 Mini-App",
+        web_app: { url: webAppUrl },
+      },
+    ],
+  ];
+
+  return { inline_keyboard: keyboard };
+}
+
+async function resolveContactUrl(options = {}, fallbackUrl = "") {
+  const fromOptions = await options.getContactUrl?.();
+  return validTelegramUrl(fromOptions) || validTelegramUrl(getTelegramConfig().contactUrl) || fallbackUrl;
+}
+
 function isForbiddenTelegramError(error) {
   const message = String(error?.message || "").toLowerCase();
   return message.includes("bot was blocked")
@@ -307,13 +436,57 @@ async function configureBot(token, webAppUrl, buttonText) {
   });
 }
 
-async function sendMiniAppInvite(token, chatId, webAppUrl, buttonText, welcomeText) {
-  await sendTelegramMessage(token, {
-    chat_id: chatId,
-    text: welcomeText,
-    disable_web_page_preview: true,
-    reply_markup: miniAppKeyboard(webAppUrl, buttonText),
+async function sendStartMenu(token, chatId, webAppUrl, contactUrl, logoPath, welcomeText) {
+  const replyMarkup = startMenuKeyboard(webAppUrl, contactUrl);
+
+  try {
+    await sendTelegramPhoto(token, {
+      chat_id: chatId,
+      reply_markup: replyMarkup,
+    }, logoPath);
+  } catch (error) {
+    console.warn(`Telegram bot logo send failed: ${error.message}`);
+    const state = getChatCleanupState(token, chatId);
+    if (state) state.messageId = null;
+    await sendTelegramMessage(token, {
+      chat_id: chatId,
+      text: welcomeText,
+      disable_web_page_preview: true,
+      reply_markup: replyMarkup,
+    });
+  }
+}
+
+async function answerCallbackQuery(token, callbackQueryId, payload = {}) {
+  if (!callbackQueryId) return;
+  await telegramApi(token, "answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    ...payload,
   });
+}
+
+async function showStartInfo(token, callbackQuery, webAppUrl, contactUrl) {
+  const message = callbackQuery?.message;
+  if (!message?.chat?.id || !message?.message_id) return;
+
+  const replyMarkup = startMenuKeyboard(webAppUrl, contactUrl);
+  try {
+    await telegramApi(token, "editMessageCaption", {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      caption: START_INFO_TEXT,
+      reply_markup: replyMarkup,
+    });
+    trackBotMessage(token, message.chat.id, message);
+  } catch (error) {
+    if (!isMessageNotModifiedError(error)) {
+      await sendTelegramMessage(token, {
+        chat_id: message.chat.id,
+        text: START_INFO_TEXT,
+        reply_markup: replyMarkup,
+      });
+    }
+  }
 }
 
 async function sendAdminPasswordRequest(token, chatId) {
@@ -333,6 +506,22 @@ async function sendAdminLoginButton(token, chatId, adminUrl) {
 }
 
 async function handleUpdate(token, update, webAppUrl, buttonText, welcomeText, options = {}) {
+  if (update.callback_query) {
+    const callbackQuery = update.callback_query;
+    const chatId = callbackQuery.message?.chat?.id;
+    if (chatId) markChatActivity(token, chatId);
+
+    if (callbackQuery.data === START_INFO_CALLBACK) {
+      const contactUrl = await resolveContactUrl(options, webAppUrl);
+      await answerCallbackQuery(token, callbackQuery.id);
+      await showStartInfo(token, callbackQuery, webAppUrl, contactUrl);
+      return;
+    }
+
+    await answerCallbackQuery(token, callbackQuery.id);
+    return;
+  }
+
   const message = update.message;
   if (!message?.chat?.id) return;
   markChatActivity(token, message.chat.id);
@@ -406,7 +595,8 @@ async function handleUpdate(token, update, webAppUrl, buttonText, welcomeText, o
   }
 
   if (chatType === "private" || isKnownCommand) {
-    await sendMiniAppInvite(token, message.chat.id, webAppUrl, buttonText, welcomeText);
+    const contactUrl = await resolveContactUrl(options, webAppUrl);
+    await sendStartMenu(token, message.chat.id, webAppUrl, contactUrl, options.logoPath || getTelegramConfig().logoPath, welcomeText);
   }
 }
 
@@ -522,7 +712,7 @@ export function startTelegramBot(options = {}) {
         const updates = await telegramApi(config.token, "getUpdates", {
           offset,
           timeout: 25,
-          allowed_updates: ["message"],
+          allowed_updates: ["message", "callback_query"],
         });
 
         for (const update of updates || []) {
@@ -533,7 +723,7 @@ export function startTelegramBot(options = {}) {
             config.webAppUrl,
             config.buttonText,
             config.welcomeText,
-            { ...options, adminPasswordRequests },
+            { ...options, adminPasswordRequests, logoPath: config.logoPath },
           );
         }
       } catch (error) {

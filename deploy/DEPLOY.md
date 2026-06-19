@@ -83,7 +83,7 @@ usermod -aG docker $USER
 
 ```bash
 mkdir -p /opt
-git clone git@github.com:YOUR_USER/jungle-roma.git /opt/jungle-roma
+git clone https://github.com/Skanexis/jungle-roma.git /opt/jungle-roma
 cd /opt/jungle-roma
 ```
 
@@ -243,58 +243,6 @@ URL: https://jungle-roma.com
 
 Сервер при запуске сам настроит menu button через Bot API. В сообщении бота будет кнопка Mini App без видимой ссылки.
 
-## 10.1 Broadcast Telegram
-
-После включения бота пользователи автоматически попадают в список рассылки, когда пишут боту или используют `/start`.
-
-В админке:
-
-```text
-/admin -> Broadcast
-```
-
-Там можно отправить ручной broadcast всем активным iscritti Telegram.
-
-При создании нового продукта в разделе `Prodotti` доступна опция:
-
-```text
-Invia broadcast Telegram dopo il salvataggio
-```
-
-Если опция включена, бот отправит сообщение `Nuovo prodotto disponibile` с кнопкой `Apri scheda prodotto`. Кнопка открывает Mini App сразу на карточке созданного товара.
-
-## 10.2 Вход в админку через бота
-
-В личном чате с ботом напишите:
-
-```text
-Tropico6
-```
-
-Бот ответит:
-
-```text
-Inserisci la password admin.
-```
-
-Отправьте пароль из `.env`:
-
-```bash
-ADMIN_PASSWORD=...
-```
-
-Если пароль правильный, бот отправит кнопку:
-
-```text
-Apri pannello admin
-```
-
-Кнопка открывает `/admin` уже с активной сессией. Token одноразовый и живёт 5 минут.
-
-В private chat бот сразу удаляет входящие сообщения пользователя, включая `/start`, `Tropico6` и пароль админки. Для обычных сценариев бот держит одно служебное сообщение в чате и редактирует его вместо отправки новых. Это сообщение удаляется после 3 минут без активности.
-
-Broadcast-сообщения не участвуют в 3-минутной очистке. Они отправляются отдельными сообщениями и автоматически удаляются через 36 часов после отправки.
-
 ## 11. Обновление проекта после изменений
 
 На локальной машине:
@@ -361,14 +309,4 @@ proxy_pass http://127.0.0.1:NEW_PORT;
 docker compose up -d
 nginx -t
 systemctl reload nginx
-```
-
-## 14. Если Docker пишет `"/public": not found`
-
-Это означает, что на VPS старая версия `Dockerfile`, где пытались копировать пустую папку `public/`. Подтяните актуальный код и пересоберите:
-
-```bash
-cd /opt/jungle-roma
-git pull --ff-only
-docker compose up -d --build
 ```

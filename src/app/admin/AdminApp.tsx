@@ -55,7 +55,7 @@ const adminSections: Array<{ id: AdminSection; label: string; icon: ReactNode }>
   { id: "settings", label: "Impostazioni", icon: <Settings size={18} /> },
 ];
 
-function blankProduct(category = "Prodotti"): Product {
+function blankProduct(category = ""): Product {
   return {
     id: "",
     name: "",
@@ -71,21 +71,21 @@ function blankProduct(category = "Prodotti"): Product {
       { label: "50g", price: 0 },
     ],
     category,
-    categories: [category],
+    categories: category ? [category] : [],
     badge: "",
     isActive: true,
   };
 }
 
-function uniqueCategories(categories: string[], fallback = "Prodotti") {
+function uniqueCategories(categories: string[]) {
   const cleaned = categories.map((item) => item.trim()).filter(Boolean);
   const unique = Array.from(new Set(cleaned));
-  return (unique.length ? unique : [fallback]).slice(0, 3);
+  return unique.slice(0, 3);
 }
 
 function compactProduct(product: Product): Product {
   const videos = product.videos || [];
-  const categories = uniqueCategories(product.categories?.length ? product.categories : [product.category]);
+  const categories = uniqueCategories(Array.isArray(product.categories) ? product.categories : [product.category]);
 
   return {
     ...product,
@@ -100,7 +100,7 @@ function compactProduct(product: Product): Product {
     prices: product.prices
       .map((price) => ({ label: price.label.trim(), price: Number(price.price) }))
       .filter((price) => price.label && Number.isFinite(price.price)),
-    category: categories[0],
+    category: categories[0] || "",
     categories,
     badge: product.badge?.trim() || "",
     isActive: product.isActive !== false,
@@ -108,11 +108,11 @@ function compactProduct(product: Product): Product {
 }
 
 function hydrateProduct(product: Product): Product {
-  const categories = getProductCategories(product);
+  const categories = uniqueCategories(Array.isArray(product.categories) ? product.categories : getProductCategories(product));
   return {
     ...product,
     categories,
-    category: categories[0] || product.category || "Prodotti",
+    category: categories[0] || "",
     images: product.images || [],
     videos: product.videos || [],
   };
@@ -251,7 +251,7 @@ export default function AdminApp() {
   };
 
   const createProductDraft = () => {
-    const product = blankProduct(categoryNames[0] || "Prodotti");
+    const product = blankProduct(categoryNames[0] || "");
     setSelectedProductId("");
     setDraft(product);
     setNotifyNewProduct(false);
@@ -302,7 +302,7 @@ export default function AdminApp() {
     runAction(async () => {
       const products = await deleteAdminProduct(product.id);
       setData((current) => ({ ...current, products }));
-      const next = products[0] || blankProduct(categoryNames[0] || "Prodotti");
+      const next = products[0] || blankProduct(categoryNames[0] || "");
       setSelectedProductId(next.id || "");
       setDraft(next);
     }, "Prodotto eliminato");
@@ -411,8 +411,8 @@ export default function AdminApp() {
     if (!window.confirm(`Eliminare categoria ${category.name}?`)) return;
 
     runAction(async () => {
-      const categories = await deleteAdminCategory(category.id);
-      setData((current) => ({ ...current, categories }));
+      await deleteAdminCategory(category.id);
+      await loadAdminData();
     }, "Categoria eliminata");
   };
 
@@ -655,7 +655,7 @@ function CatalogAdmin({
           <CategoryPicker
             categories={categoryNames}
             selected={getProductCategories(draft)}
-            onChange={(categories) => onDraftChange({ ...draft, categories, category: categories[0] || draft.category })}
+            onChange={(categories) => onDraftChange({ ...draft, categories, category: categories[0] || "" })}
           />
           <label>
             Badge
@@ -735,7 +735,7 @@ function CategoryPicker({
   const toggle = (category: string) => {
     if (selectedSet.has(category)) {
       const next = selected.filter((item) => item !== category);
-      onChange(next.length ? next : [category]);
+      onChange(next);
       return;
     }
 

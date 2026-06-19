@@ -255,11 +255,12 @@ function normalizeProduct(product = {}, usedIds = new Set(), existing = null, op
   usedIds.add(id);
   const videos = cleanStringArray(product.videos, 3);
   const explicitVideoUrl = cleanString(product.videoUrl);
+  const hasCategories = Array.isArray(product.categories);
   const categories = cleanUniqueStringArray(
-    Array.isArray(product.categories) ? product.categories : [product.category],
+    hasCategories ? product.categories : [product.category],
     3,
   );
-  const primaryCategory = categories[0] || cleanString(product.category, "Prodotti");
+  const primaryCategory = categories[0] || (hasCategories ? "" : cleanString(product.category, "Prodotti"));
 
   return {
     id,
@@ -273,7 +274,7 @@ function normalizeProduct(product = {}, usedIds = new Set(), existing = null, op
     videoUrl: explicitVideoUrl || videos[0] || "",
     prices: cleanPrices(product.prices),
     category: primaryCategory,
-    categories: categories.length ? categories : [primaryCategory],
+    categories: categories.length ? categories : (primaryCategory ? [primaryCategory] : []),
     badge: cleanString(product.badge),
     isActive: product.isActive === undefined ? true : cleanBoolean(product.isActive),
     createdAt: existing?.createdAt || nowIso(),
@@ -285,14 +286,15 @@ function normalizeDb(db) {
   const categoryIds = new Set();
   const contactIds = new Set();
   const productIds = new Set();
+  const hasCategoryList = Array.isArray(db?.categories);
 
-  const categories = (Array.isArray(db?.categories) ? db.categories : EMPTY_DB.categories)
+  const categories = (hasCategoryList ? db.categories : EMPTY_DB.categories)
     .map((category) => normalizeCategory(category, categoryIds))
     .filter(Boolean);
 
   return {
     settings: normalizeSettings(db?.settings || EMPTY_DB.settings),
-    categories: categories.length ? categories : EMPTY_DB.categories,
+    categories,
     contacts: (Array.isArray(db?.contacts) ? db.contacts : [])
       .map((contact) => normalizeContact(contact, contactIds))
       .filter(Boolean),
@@ -521,6 +523,11 @@ function publicAppUrl() {
   } catch {
     return new URL(`http://localhost:${PORT}`);
   }
+}
+
+async function telegramContactUrl() {
+  const db = await readDb();
+  return db.settings.orderUrl || db.settings.telegramUrl || `https://t.me/${db.settings.telegramUsername}`;
 }
 
 function createAdminLoginUrl(meta = {}) {
@@ -786,15 +793,21 @@ app.delete("/api/admin/categories/:id", requireAuth, async (req, res) => {
     return;
   }
 
-  const inUse = db.products.some((product) => (
-    product.category === category.name || product.categories?.includes(category.name)
-  ));
-  if (inUse) {
-    res.status(409).json({ error: "Category is used by products." });
-    return;
-  }
-
   db.categories = db.categories.filter((item) => item.id !== req.params.id);
+  db.products = db.products.map((product) => {
+    const productCategories = Array.isArray(product.categories) ? product.categories : [product.category];
+    const usesCategory = product.category === category.name || productCategories.includes(category.name);
+    if (!usesCategory) return product;
+
+    const nextCategories = productCategories.filter((item) => item && item !== category.name);
+
+    return {
+      ...product,
+      category: nextCategories[0] || "",
+      categories: nextCategories,
+      updatedAt: nowIso(),
+    };
+  });
   const saved = await writeDb(db);
   res.json(saved.categories);
 });
@@ -990,6 +1003,7 @@ app.listen(PORT, () => {
     upsertSubscriber: upsertTelegramSubscriber,
     verifyAdminPassword: isAdminPassword,
     createAdminLoginUrl,
+    getContactUrl: telegramContactUrl,
     getPendingBroadcastMessages: getPendingTelegramBroadcastMessages,
     markBroadcastMessageDeleted: markTelegramBroadcastMessageDeleted,
   });
