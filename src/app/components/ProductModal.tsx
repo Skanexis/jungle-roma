@@ -152,8 +152,8 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 overflow: hidden;
                 border: 1px solid rgba(238,234,220,0.12);
                 border-radius: clamp(16px, 2.2vw, 24px);
-                background: transparent;
-                box-shadow: none;
+                background: #020403;
+                box-shadow: inset 0 0 0 1px rgba(0,0,0,0.34), inset 0 -18px 22px rgba(0,0,0,0.38);
                 left: clamp(4px, 0.4vw, 8px);
                 top: clamp(16px, 1.6vw, 22px);
               }
@@ -191,7 +191,7 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 flex-direction: column;
                 align-items: center;
                 gap: clamp(7px, 0.95vw, 11px);
-                transform: translateY(clamp(12px, 1.6vw, 18px));
+                transform: translateY(clamp(16px, 1.9vw, 22px));
                 width: 100%;
               }
 
@@ -211,7 +211,11 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
               }
 
               .product-detail-price-button {
-                height: clamp(52px, 6vw, 58px);
+                --product-detail-price-label-size: clamp(14px, 1.6vw, 17px);
+                --product-detail-price-value-size: clamp(11px, 1.28vw, 13px);
+                --product-detail-price-text-y: 2px;
+                --product-detail-price-gap: 1px;
+                height: clamp(62px, 6.8vw, 70px);
                 width: clamp(163px, 22.8vw, 221px);
               }
 
@@ -242,12 +246,13 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
               }
 
               .product-detail-add-button {
-                translate: 0 clamp(12px, 1.7vw, 18px);
+                translate: 0 clamp(28px, 3.5vw, 38px);
               }
 
               @media (max-width: 767px) {
                 .product-detail-modal {
                   margin-top: 5svh;
+                  left: clamp(10px, 3.4vw, 16px);
                 }
 
                 .product-detail-frame {
@@ -283,8 +288,8 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 }
 
                 .product-detail-prices-grid {
-                  gap: clamp(4px, 1svh, 7px);
-                  transform: translateY(clamp(8px, 1.2svh, 12px));
+                  gap: clamp(6px, 1.2svh, 9px);
+                  transform: translateY(clamp(20px, 2.7svh, 27px));
                 }
 
                 .product-detail-prices-row-top {
@@ -296,7 +301,11 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 }
 
                 .product-detail-price-button {
-                  height: clamp(43px, 6svh, 48px);
+                  --product-detail-price-label-size: clamp(13px, 3.8vw, 16px);
+                  --product-detail-price-value-size: clamp(10.5px, 3.1vw, 12.5px);
+                  --product-detail-price-text-y: 3px;
+                  --product-detail-price-gap: 0px;
+                  height: clamp(54px, 7.4svh, 60px);
                   width: clamp(118px, 36vw, 139px);
                 }
 
@@ -317,7 +326,7 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                   justify-content: flex-end;
                   padding: 0 clamp(6px, 2.2vw, 10px);
                   margin-top: auto;
-                  transform: translateY(clamp(-10px, -1.5svh, -5px));
+                  transform: translateY(clamp(4px, 1svh, 10px));
                   align-items: flex-end;
                 }
 
@@ -330,12 +339,16 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 }
 
                 .product-detail-add-button {
-                  translate: 0 clamp(-20px, -3svh, -12px);
+                  translate: 0 clamp(4px, 1.5svh, 12px);
                   margin-left: auto;
                 }
               }
 
               @media (max-width: 390px) {
+                .product-detail-modal {
+                  left: 14px;
+                }
+
                 .product-detail-safe {
                   top: 10.4%;
                   bottom: 8.8%;
@@ -351,12 +364,15 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                 }
 
                 .product-detail-prices-grid {
-                  gap: 2px;
-                  transform: translateY(6px);
+                  gap: 5px;
+                  transform: translateY(28px);
                 }
 
                 .product-detail-price-button {
-                  height: clamp(32px, 4.8svh, 38px);
+                  --product-detail-price-label-size: clamp(13px, 4vw, 15.5px);
+                  --product-detail-price-value-size: clamp(10px, 3.15vw, 12px);
+                  --product-detail-price-text-y: 2px;
+                  height: clamp(50px, 6.6svh, 56px);
                   width: clamp(106px, 35vw, 128px);
                 }
 
@@ -368,11 +384,71 @@ export function ProductModal({ product, orderHref, onClose }: ProductModalProps)
                   min-height: clamp(34px, 5.8svh, 42px);
                   gap: 5px;
                   padding: 0 5px;
-                  transform: translateY(clamp(-7px, -1.2svh, -3px));
+                  transform: translateY(clamp(4px, 1.2svh, 8px));
                 }
 
                 .product-detail-add-button {
-                  translate: 0 clamp(-14px, -2.4svh, -8px);
+                  translate: 0 clamp(4px, 1.4svh, 10px);
+                }
+              }
+
+              @media (max-width: 360px) and (max-height: 700px) {
+                .product-detail-prices-row-bottom {
+                  justify-content: flex-start;
+                  gap: 2px;
+                  padding-left: clamp(9px, 5.2vw, 17px);
+                }
+
+                .product-detail-prices-row-bottom .product-detail-price-button {
+                  width: clamp(86px, 28vw, 90px);
+                }
+
+                .product-detail-footer {
+                  position: absolute;
+                  right: clamp(32px, 10vw, 44px);
+                  bottom: clamp(-28px, -4.8svh, -18px);
+                  width: auto;
+                  min-height: 38px;
+                  margin-top: 0;
+                  padding: 0;
+                  transform: none;
+                  z-index: 42;
+                }
+
+                .product-detail-add-button {
+                  width: clamp(82px, 28vw, 90px) !important;
+                  height: 38px !important;
+                  translate: none;
+                }
+              }
+
+              @media (min-width: 768px) and (max-width: 900px) {
+                .product-detail-prices-row-bottom {
+                  justify-content: flex-start;
+                  gap: 6px;
+                  padding-left: 16px;
+                }
+
+                .product-detail-prices-row-bottom .product-detail-price-button {
+                  width: clamp(128px, 17.2vw, 138px);
+                }
+
+                .product-detail-footer {
+                  position: absolute;
+                  right: 10px;
+                  bottom: -31px;
+                  width: auto;
+                  min-height: 44px;
+                  margin-top: 0;
+                  padding: 0;
+                  transform: none;
+                  z-index: 42;
+                }
+
+                .product-detail-add-button {
+                  width: clamp(124px, 16vw, 132px) !important;
+                  height: 44px !important;
+                  translate: none;
                 }
               }
             `}</style>
@@ -526,11 +602,12 @@ function ModalInfo({
                       style={{
                         background: "transparent",
                         border: 0,
+                        gap: "var(--product-detail-price-gap)",
                         transition: "all 0.15s",
                       }}
                       whileHover={{ scale: 1.04 }}
                       whileTap={{ scale: 0.97 }}
-                      animate={selectedPriceIdx === i ? { y: -1, scale: 1.018 } : { y: 0, scale: 1 }}
+                      animate={selectedPriceIdx === i ? { y: 0, scale: 1.018 } : { y: 0, scale: 1 }}
                       transition={selectedPriceIdx === i ? fastStoneSpring : { duration: 0.16, ease: "easeOut" }}
                     >
                       <span
@@ -553,12 +630,12 @@ function ModalInfo({
                         style={{
                           color: "#263421",
                           fontFamily: "Montserrat, sans-serif",
-                          fontSize: "clamp(14px, 1.74vw, 18px)",
+                          fontSize: "var(--product-detail-price-label-size)",
                           fontWeight: 850,
                           letterSpacing: "0.3px",
                           lineHeight: 1.05,
                           textShadow: "0 1px 0 rgba(255,255,255,0.32)",
-                          transform: "translateY(2px)",
+                          transform: "translateY(var(--product-detail-price-text-y))",
                         }}
                       >
                         {p.label}
@@ -568,11 +645,11 @@ function ModalInfo({
                         style={{
                           color: "#384337",
                           fontFamily: "Montserrat, sans-serif",
-                          fontSize: "clamp(11px, 1.38vw, 13px)",
+                          fontSize: "var(--product-detail-price-value-size)",
                           fontWeight: 850,
                           lineHeight: 1.1,
                           textShadow: "0 1px 0 rgba(255,255,255,0.32)",
-                          transform: "translateY(2px)",
+                          transform: "translateY(var(--product-detail-price-text-y))",
                         }}
                       >
                         {p.price.toLocaleString("it-IT")} €

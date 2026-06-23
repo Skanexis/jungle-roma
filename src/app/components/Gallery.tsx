@@ -50,12 +50,14 @@ function MediaSlide({
   item,
   alt,
   controls,
+  poster,
   imageClassName = "",
   imageStyle,
 }: {
   item: MediaItem;
   alt: string;
   controls: boolean;
+  poster?: string;
   imageClassName?: string;
   imageStyle?: CSSProperties;
 }) {
@@ -92,8 +94,11 @@ function MediaSlide({
         controls={controls}
         muted={!controls}
         loop={!controls}
+        autoPlay={!controls}
         playsInline
-        preload="metadata"
+        poster={poster || undefined}
+        preload={controls ? "metadata" : "auto"}
+        style={{ backgroundColor: "#020403" }}
       />
     );
   }
@@ -105,7 +110,7 @@ function MediaSlide({
       allow="autoplay; fullscreen; picture-in-picture"
       allowFullScreen
       title={alt}
-      style={{ border: 0 }}
+      style={{ border: 0, backgroundColor: "#020403" }}
     />
   );
 }
@@ -150,6 +155,7 @@ export function Gallery({
                 item={item}
                 alt={`${alt} ${index + 1}`}
                 controls={selectedIndex === index}
+                poster={images[0]}
               />
               {item.type === "video" && (
                 <div
@@ -246,6 +252,7 @@ export function CardGallery({
                   item={item}
                   alt={`${alt} ${index + 1}`}
                   controls={false}
+                  poster={images[0]}
                   imageClassName={imageClassName}
                   imageStyle={imageStyle}
                 />
